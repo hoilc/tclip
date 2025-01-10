@@ -23,6 +23,7 @@ import (
 
 	"github.com/go-enry/go-enry/v2"
 	"github.com/google/uuid"
+	"github.com/klauspost/compress/gzhttp"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/niklasfasching/go-org/org"
 	"github.com/russross/blackfriday"
@@ -667,7 +668,7 @@ WHERE p.id = ?1`
 		RawHTML             *template.HTML
 		CSSClass            string
 		EnableLineNumbers   string
-		EnableWordWrap		string
+		EnableWordWrap      string
 	}{
 		UserInfo:            up,
 		Title:               fname,
@@ -682,7 +683,7 @@ WHERE p.id = ?1`
 		RawHTML:             rawHTML,
 		CSSClass:            cssClass,
 		EnableLineNumbers:   lineNumbersClass,
-		EnableWordWrap:		 wordWrapClass,
+		EnableWordWrap:      wordWrapClass,
 	})
 	if err != nil {
 		log.Printf("%s: %v", r.RemoteAddr, err)
@@ -763,21 +764,27 @@ func main() {
 	tailnetMux.HandleFunc("/", srv.TailnetIndex)
 	tailnetMux.HandleFunc("/help", srv.TailnetHelp)
 
+	// Wrap tailnet mux with gzip compression
+	tailnetHandler := gzhttp.GzipHandler(tailnetMux)
+
 	funnelMux := http.NewServeMux()
 	funnelMux.Handle("/static/", http.FileServer(http.FS(staticFiles)))
 	funnelMux.HandleFunc("/", srv.PublicIndex)
 	funnelMux.HandleFunc("/paste/", srv.ShowPost)
 
+	// Wrap funnel mux with gzip compression
+	funnelHandler := gzhttp.GzipHandler(funnelMux)
+
 	log.Printf("listening on http://%s", *hostname)
 	if *httpPort != "" {
 		log.Printf("listening on :%s", *httpPort)
-		go func() { log.Fatal(http.ListenAndServe(":"+*httpPort, funnelMux)) }()
+		go func() { log.Fatal(http.ListenAndServe(":"+*httpPort, funnelHandler)) }()
 	}
 
 	if *disableHTTPS {
-		log.Fatal(http.Serve(ln, tailnetMux))
+		log.Fatal(http.Serve(ln, tailnetHandler))
 	} else {
-		go func() { log.Fatal(http.Serve(ln, tailnetMux)) }()
+		go func() { log.Fatal(http.Serve(ln, tailnetHandler)) }()
 	}
 
 	if *useFunnel {
@@ -790,8 +797,8 @@ func main() {
 
 		log.Printf("listening on https://%s", tclipURL)
 		log.Fatal(MixedCriticalityHandler{
-			Public:  funnelMux,
-			Private: tailnetMux,
+			Public:  funnelHandler,
+			Private: tailnetHandler,
 		}.Serve(ln))
 	} else {
 		ln, err := s.ListenTLS("tcp", ":443")
@@ -800,7 +807,7 @@ func main() {
 		}
 		defer ln.Close()
 		log.Printf("listening on https://%s", tclipURL)
-		log.Fatal(http.Serve(ln, tailnetMux))
+		log.Fatal(http.Serve(ln, tailnetHandler))
 	}
 }
 

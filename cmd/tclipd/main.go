@@ -756,7 +756,7 @@ func main() {
 	srv := &Server{lc, db, tmpls, tclipURL}
 
 	tailnetMux := http.NewServeMux()
-	tailnetMux.Handle("/static/", http.FileServer(http.FS(staticFiles)))
+	tailnetMux.Handle("/static/", cacheControlWrapper(http.FileServer(http.FS(staticFiles))))
 	tailnetMux.HandleFunc("/paste/", srv.ShowPost)
 	tailnetMux.HandleFunc("/paste/list", srv.TailnetPasteIndex)
 	tailnetMux.HandleFunc("/api/post", srv.TailnetSubmitPaste)
@@ -768,7 +768,7 @@ func main() {
 	tailnetHandler := gzhttp.GzipHandler(tailnetMux)
 
 	funnelMux := http.NewServeMux()
-	funnelMux.Handle("/static/", http.FileServer(http.FS(staticFiles)))
+	funnelMux.Handle("/static/", cacheControlWrapper(http.FileServer(http.FS(staticFiles))))
 	funnelMux.HandleFunc("/", srv.PublicIndex)
 	funnelMux.HandleFunc("/paste/", srv.ShowPost)
 
@@ -937,4 +937,22 @@ ON CONFLICT DO
 	}
 
 	return userInfo, nil
+}
+
+func cacheControlWrapper(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Set cache control headers
+		w.Header().Set("Cache-Control", "public, max-age=31536000") // 1 year
+		w.Header().Set("ETag", fmt.Sprintf(`"v1-%s"`, md5Hash(r.URL.Path)))
+		
+		// Check if client sent If-None-Match header
+		if match := r.Header.Get("If-None-Match"); match != "" {
+			if strings.Contains(match, fmt.Sprintf(`"v1-%s"`, md5Hash(r.URL.Path))) {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+		}
+		
+		h.ServeHTTP(w, r)
+	})
 }
